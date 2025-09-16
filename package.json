@@ -6,7 +6,7 @@
     "start": "vercel dev"
   },
   "dependencies": {
-    "ultraviolet": "^2.2.0",
+    "@titaniumnetwork-dev/ultraviolet": "^3.2.10",
     "scramjet": "^4.0.0",
     "express": "^4.18.2"
   },
