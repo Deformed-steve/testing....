@@ -1,7 +1,7 @@
 {
   "name": "space-browser",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "api/fetcher.js",
   "scripts": {
     "start": "vercel dev"
   },
@@ -10,6 +10,6 @@
     "jsdom": "^22.1.0"
   },
   "engines": {
-    "node": "22.x"
+    "node": "18.x"
   }
 }
