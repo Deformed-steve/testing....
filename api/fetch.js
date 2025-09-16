@@ -15,37 +15,43 @@ export default async function handler(req, res) {
     });
 
     let contentType = upstream.headers.get("content-type") || "application/octet-stream";
-
-    // Strip headers that block iframing
     res.setHeader("Content-Type", contentType);
+
+    // Prevent frame blocking
     res.removeHeader?.("content-security-policy");
     res.removeHeader?.("x-frame-options");
 
-    // If HTML → rewrite links/resources
     if (contentType.includes("text/html")) {
       let body = await upstream.text();
       const baseUrl = new URL(target);
 
-      // Rewrite src, href, action attributes → route through /fetch
+      // Inject <base> so relative URLs resolve correctly
+      body = body.replace(
+        /<head[^>]*>/i,
+        match => `${match}<base href="${baseUrl.origin}">`
+      );
+
+      // Rewrite relative links/forms/scripts
       body = body.replace(
         /(src|href|action)=["'](?!https?:\/\/)([^"']+)["']/g,
-        (match, attr, relPath) => {
-          const absoluteUrl = new URL(relPath, baseUrl).href;
+        (m, attr, rel) => {
+          const absoluteUrl = new URL(rel, baseUrl).href;
           return `${attr}="/api/fetch?url=${encodeURIComponent(absoluteUrl)}"`;
         }
       );
 
-      // Also rewrite absolute external links → through /fetch
+      // Rewrite absolute external links
       body = body.replace(
         /(src|href|action)=["']https?:\/\/([^"']+)["']/g,
-        (match, attr, link) => {
-          return `${attr}="/api/fetch?url=https://${link}"`;
+        (m, attr, link) => {
+          const url = m.match(/["'](https?:\/\/[^"']+)["']/)[1];
+          return `${attr}="/api/fetch?url=${encodeURIComponent(url)}"`;
         }
       );
 
       res.status(200).send(body);
     } else {
-      // Non-HTML → stream raw
+      // Stream non-HTML resources
       const buffer = Buffer.from(await upstream.arrayBuffer());
       res.status(200).send(buffer);
     }
