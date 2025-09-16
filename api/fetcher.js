@@ -1,59 +1,64 @@
 const fetch = require("node-fetch");
 const { JSDOM } = require("jsdom");
 
-export default async function handler(req, res) {
-  const url = req.query.url;
-  if (!url) return res.status(400).send("Missing url");
+// Simple in-memory cookie jar (per serverless invocation)
+let cookieJar = {};
+
+module.exports = async (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl) return res.status(400).send("Missing url");
 
   try {
-    // Fetch original page
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-    let html = await response.text();
+    // Prepare headers including cookies
+    let headers = { "User-Agent": "Mozilla/5.0" };
+    if (cookieJar[targetUrl]) headers["Cookie"] = cookieJar[targetUrl];
 
-    // Rewrite HTML links, scripts, forms to point through this proxy
+    // Fetch the target page
+    const response = await fetch(targetUrl, { headers });
+    const contentType = response.headers.get("content-type") || "";
+
+    // Capture cookies from response
+    const setCookie = response.headers.raw()["set-cookie"];
+    if (setCookie) {
+      cookieJar[targetUrl] = setCookie.map(c => c.split(";")[0]).join("; ");
+    }
+
+    // If it's not HTML, just pipe it directly (images, CSS, JS)
+    if (!contentType.includes("text/html")) {
+      const buffer = await response.buffer();
+      res.setHeader("Content-Type", contentType);
+      return res.send(buffer);
+    }
+
+    // Parse HTML and rewrite URLs
+    const html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // Rewrite all <a href>
-    document.querySelectorAll("a[href]").forEach(a => {
-      let href = a.getAttribute("href");
-      if (!href.startsWith("http")) href = new URL(href, url).href;
-      a.setAttribute("href", `/api/fetcher?url=${encodeURIComponent(href)}`);
+    // Rewrite <a href>, <form action>
+    document.querySelectorAll("a[href], form[action]").forEach(el => {
+      const attr = el.tagName === "A" ? "href" : "action";
+      let val = el.getAttribute(attr);
+      if (!val) return;
+      if (!val.startsWith("http")) val = new URL(val, targetUrl).href;
+      el.setAttribute(attr, `/api/fetcher?url=${encodeURIComponent(val)}`);
     });
 
-    // Rewrite <form action>
-    document.querySelectorAll("form[action]").forEach(f => {
-      let action = f.getAttribute("action");
-      if (!action.startsWith("http")) action = new URL(action, url).href;
-      f.setAttribute("action", `/api/fetcher?url=${encodeURIComponent(action)}`);
+    // Rewrite <img src>, <script src>, <link href>
+    document.querySelectorAll("img[src], script[src], link[href]").forEach(el => {
+      const attr = el.tagName === "IMG" ? "src" : el.tagName === "SCRIPT" ? "src" : "href";
+      let val = el.getAttribute(attr);
+      if (!val) return;
+      if (!val.startsWith("http")) val = new URL(val, targetUrl).href;
+      el.setAttribute(attr, `/api/fetcher?url=${encodeURIComponent(val)}`);
     });
 
-    // Rewrite <script src>
-    document.querySelectorAll("script[src]").forEach(s => {
-      let src = s.getAttribute("src");
-      if (!src.startsWith("http")) src = new URL(src, url).href;
-      s.setAttribute("src", `/api/fetcher?url=${encodeURIComponent(src)}`);
-    });
-
-    // Rewrite <link href>
-    document.querySelectorAll("link[href]").forEach(l => {
-      let href = l.getAttribute("href");
-      if (!href.startsWith("http")) href = new URL(href, url).href;
-      l.setAttribute("href", `/api/fetcher?url=${encodeURIComponent(href)}`);
-    });
-
-    // Rewrite <img src>
-    document.querySelectorAll("img[src]").forEach(img => {
-      let src = img.getAttribute("src");
-      if (!src.startsWith("http")) src = new URL(src, url).href;
-      img.setAttribute("src", `/api/fetcher?url=${encodeURIComponent(src)}`);
-    });
-
+    // Serve rewritten HTML
     res.setHeader("Content-Type", "text/html");
     res.send(dom.serialize());
+
   } catch (err) {
-    res.status(500).send("Error fetching page: " + err.message);
+    console.error(err);
+    res.status(500).send("Failed to fetch target URL: " + err.message);
   }
-}
+};
