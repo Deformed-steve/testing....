@@ -1,5 +1,5 @@
-import fetch from "node-fetch";
-import { JSDOM } from "jsdom";
+const fetch = require("node-fetch");
+const { JSDOM } = require("jsdom");
 
 export default async function handler(req, res) {
   const url = req.query.url;
