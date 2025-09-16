@@ -1,48 +1,17 @@
-// Star background animation
-const canvas = document.getElementById("stars");
-const ctx = canvas.getContext("2d");
-let stars = [];
+const iframe = document.getElementById("viewer");
+const urlInput = document.getElementById("urlInput");
+const engineSelect = document.getElementById("engineSelect");
 
-function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-}
-window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
+// Load engine choice from localStorage
+engineSelect.value = localStorage.getItem("engine") || "uv";
 
-for (let i = 0; i < 150; i++) {
-  stars.push({
-    x: Math.random() * canvas.width,
-    y: Math.random() * canvas.height,
-    r: Math.random() * 2,
-    d: Math.random() * 0.5
-  });
-}
+engineSelect.addEventListener("change", () => {
+  localStorage.setItem("engine", engineSelect.value);
+});
 
-function drawStars() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "white";
-  stars.forEach(s => {
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    ctx.fill();
-
-    s.y += s.d;
-    if (s.y > canvas.height) {
-      s.y = 0;
-      s.x = Math.random() * canvas.width;
-    }
-  });
-}
-
-setInterval(drawStars, 30);
-
-// URL loader
-async function loadSite() {
-  const input = document.getElementById("urlInput").value.trim();
-  if (!input) return;
-
-  const fullUrl = `https://${input}`;
-  const iframe = document.getElementById("viewer");
-  iframe.src = `/fetch?url=${encodeURIComponent(fullUrl)}`;
+function loadSite() {
+  const url = urlInput.value.trim();
+  if (!url) return;
+  const engine = engineSelect.value;
+  iframe.src = `/api/${engine}?url=${encodeURIComponent("https://" + url)}`;
 }
