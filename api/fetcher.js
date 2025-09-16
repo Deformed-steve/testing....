@@ -6,13 +6,13 @@ let cookieJar = {};
 
 module.exports = async (req, res) => {
   try {
-    let targetUrl = req.query.url;
+    const targetUrl = req.query.url;
     if (!targetUrl) return res.status(400).send("Missing url");
 
     const method = req.method.toUpperCase();
     const body = method === "POST" ? req.body : undefined;
 
-    // Forward headers and cookies
+    // Forward headers & cookies
     const headers = {
       "User-Agent": "Mozilla/5.0",
       "Accept": req.headers["accept"] || "*/*",
@@ -40,19 +40,20 @@ module.exports = async (req, res) => {
 
     const contentType = response.headers.get("content-type") || "";
 
-    // Non-HTML: just stream through
+    // Non-HTML assets: stream with headers
     if (!contentType.includes("text/html")) {
       const buffer = await response.buffer();
       res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "no-store, no-cache");
       return res.send(buffer);
     }
 
     // HTML rewriting
-    const html = await response.text();
+    let html = await response.text();
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // Helper to rewrite URLs
+    // Helper to rewrite URLs for all elements
     const rewriteAttr = (el, attr) => {
       let val = el.getAttribute(attr);
       if (!val) return;
@@ -62,7 +63,7 @@ module.exports = async (req, res) => {
       el.setAttribute(attr, `/api/fetcher?url=${encodeURIComponent(val)}`);
     };
 
-    // Rewrite links, forms, images, scripts, styles
+    // Rewrite <a>, <form>, <img>, <script>, <link>
     document.querySelectorAll("a[href], form[action]").forEach(el => {
       rewriteAttr(el, el.tagName === "A" ? "href" : "action");
     });
@@ -83,35 +84,78 @@ module.exports = async (req, res) => {
       el.setAttribute("style", style);
     });
 
-    // Rewrite <style> blocks
+    // Rewrite <style> blocks with url() & @import
     document.querySelectorAll("style").forEach(s => {
-      s.textContent = s.textContent.replace(/url\(["']?(.*?)["']?\)/g, (_, url) => {
-        if (!url.startsWith("http") && !url.startsWith("//")) {
-          try { url = new URL(url, targetUrl).href; } catch {}
-        }
-        return `url(/api/fetcher?url=${encodeURIComponent(url)})`;
-      });
+      s.textContent = s.textContent
+        .replace(/url\(["']?(.*?)["']?\)/g, (_, url) => {
+          if (!url.startsWith("http") && !url.startsWith("//")) {
+            try { url = new URL(url, targetUrl).href; } catch {}
+          }
+          return `url(/api/fetcher?url=${encodeURIComponent(url)})`;
+        })
+        .replace(/@import\s+["'](.*?)["']/g, (_, url) => {
+          if (!url.startsWith("http") && !url.startsWith("//")) {
+            try { url = new URL(url, targetUrl).href; } catch {}
+          }
+          return `@import "/api/fetcher?url=${encodeURIComponent(url)}"`;
+        });
     });
 
-    // Rewrite inline JS fetch/ajax calls (simple regex)
+    // Rewrite inline JS fetch/XMLHttpRequest dynamically
     document.querySelectorAll("script").forEach(s => {
       if (!s.src) {
-        s.textContent = s.textContent.replace(/fetch\(["'](.*?)["']/g, (_, url) => {
-          if (!url.startsWith("http") && !url.startsWith("//")) {
-            try { url = new URL(url, targetUrl).href; } catch {}
-          }
-          return `fetch("/api/fetcher?url=${encodeURIComponent(url)}"`;
-        });
-        s.textContent = s.textContent.replace(/XMLHttpRequest\(["'](.*?)["']/g, (_, url) => {
-          if (!url.startsWith("http") && !url.startsWith("//")) {
-            try { url = new URL(url, targetUrl).href; } catch {}
-          }
-          return `XMLHttpRequest("/api/fetcher?url=${encodeURIComponent(url)}"`;
-        });
+        s.textContent = s.textContent
+          .replace(/fetch\(["'](.*?)["']/g, (_, url) => {
+            if (!url.startsWith("http") && !url.startsWith("//")) {
+              try { url = new URL(url, targetUrl).href; } catch {}
+            }
+            return `fetch("/api/fetcher?url=${encodeURIComponent(url)}"`;
+          })
+          .replace(/XMLHttpRequest\(["'](.*?)["']/g, (_, url) => {
+            if (!url.startsWith("http") && !url.startsWith("//")) {
+              try { url = new URL(url, targetUrl).href; } catch {}
+            }
+            return `XMLHttpRequest("/api/fetcher?url=${encodeURIComponent(url)}"`;
+          });
       }
     });
 
-    // Proper headers
+    // Frontend shim: intercept dynamic scripts & links
+    const frontendShim = document.createElement("script");
+    frontendShim.textContent = `
+      const origCreate = Element.prototype.appendChild;
+      Element.prototype.appendChild = function(el){
+        if(el.tagName === 'SCRIPT' && el.src){
+          el.src = '/api/fetcher?url=' + encodeURIComponent(el.src);
+        }
+        if(el.tagName === 'LINK' && el.href){
+          el.href = '/api/fetcher?url=' + encodeURIComponent(el.href);
+        }
+        return origCreate.call(this, el);
+      };
+      // Override fetch/XHR globally
+      const origFetch = window.fetch;
+      window.fetch = (input, init) => {
+        if(typeof input === 'string' && !input.startsWith('http')){
+          input = '/api/fetcher?url=' + encodeURIComponent(input);
+        }
+        return origFetch(input, init);
+      };
+      const OrigXHR = XMLHttpRequest;
+      XMLHttpRequest = function(){
+        const xhr = new OrigXHR();
+        const origOpen = xhr.open;
+        xhr.open = function(method, url, ...args){
+          if(typeof url === 'string' && !url.startsWith('http')){
+            url = '/api/fetcher?url=' + encodeURIComponent(url);
+          }
+          return origOpen.call(this, method, url, ...args);
+        };
+        return xhr;
+      };
+    `;
+    document.body.appendChild(frontendShim);
+
     res.setHeader("Content-Type", "text/html; charset=UTF-8");
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
