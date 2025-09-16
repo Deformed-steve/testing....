@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     let contentType = upstream.headers.get("content-type") || "application/octet-stream";
     res.setHeader("Content-Type", contentType);
 
-    // Prevent frame blocking
+    // Strip blocking headers
     res.removeHeader?.("content-security-policy");
     res.removeHeader?.("x-frame-options");
 
@@ -25,25 +25,25 @@ export default async function handler(req, res) {
       let body = await upstream.text();
       const baseUrl = new URL(target);
 
-      // Inject <base> so relative URLs resolve correctly
+      // Add <base> so relative paths resolve correctly in browser
       body = body.replace(
         /<head[^>]*>/i,
         match => `${match}<base href="${baseUrl.origin}">`
       );
 
-      // Rewrite relative links/forms/scripts
+      // Rewrite relative URLs (scripts, links, forms, images, etc.)
       body = body.replace(
-        /(src|href|action)=["'](?!https?:\/\/)([^"']+)["']/g,
+        /(src|href|action)=["'](?!https?:\/\/|data:|mailto:|#)([^"']+)["']/gi,
         (m, attr, rel) => {
           const absoluteUrl = new URL(rel, baseUrl).href;
           return `${attr}="/api/fetch?url=${encodeURIComponent(absoluteUrl)}"`;
         }
       );
 
-      // Rewrite absolute external links
+      // Rewrite absolute external URLs → funnel through /api/fetch
       body = body.replace(
-        /(src|href|action)=["']https?:\/\/([^"']+)["']/g,
-        (m, attr, link) => {
+        /(src|href|action)=["']https?:\/\/([^"']+)["']/gi,
+        (m, attr) => {
           const url = m.match(/["'](https?:\/\/[^"']+)["']/)[1];
           return `${attr}="/api/fetch?url=${encodeURIComponent(url)}"`;
         }
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
 
       res.status(200).send(body);
     } else {
-      // Stream non-HTML resources
+      // Non-HTML (CSS, JS, images, fonts, etc.)
       const buffer = Buffer.from(await upstream.arrayBuffer());
       res.status(200).send(buffer);
     }
